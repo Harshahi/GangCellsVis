@@ -44,6 +44,9 @@ if uploaded_file is not None:
         from PIL import Image, ImageDraw, ImageFont
         import subprocess
 
+        import json
+        import streamlit.components.v1 as components
+
         # Sidebar config
         st.sidebar.markdown("---")
         st.sidebar.subheader("Rendering Settings")
@@ -54,24 +57,21 @@ if uploaded_file is not None:
         )
         fps_speed = st.sidebar.slider(
             "Playback Speed (FPS)", min_value=10, max_value=100, value=50, step=5,
-            help="Playback speed of the exported MP4 video."
+            help="Playback speed of the exported visualization."
         )
 
-        @st.cache_data(show_spinner=False, persist=True)
-        def generate_video(video_idx, _data_array, res_str, fps):
-            data = _data_array[video_idx] # Shape: (160, 953)
-            cumulative_data = np.cumsum(data, axis=1) # Shape: (160, 953)
-            
-            target_h = int(res_str.replace('p', ''))
-            scale = target_h / 500.0
-            width, height = int(800 * scale), target_h
-            # Make sure width and height are even for ffmpeg yuv420p
-            width = width if width % 2 == 0 else width + 1
-            height = height if height % 2 == 0 else height + 1
-            
-            hex_radius = 20 * scale
+        def render_html5_viewer(data_matrix, cumulative_data_matrix, high_data, fps, mode="individual", scale=1.0, n_vids=297):
+            width = int(800 * scale)
+            height = int(500 * scale)
+            if mode == "aggregate":
+                width = int(1280 * scale)
+                height = int(720 * scale)
+                hex_radius = 35 * scale
+            else:
+                hex_radius = 20 * scale
 
             cols = 16
+            n_neurons = data_matrix.shape[0]
             rows = int(np.ceil(n_neurons / cols))
 
             centers = []
@@ -101,216 +101,191 @@ if uploaded_file is not None:
                     points.append((px, py))
                 polygons.append(points)
 
-            bg_color = (14, 17, 23)
-            base_img = Image.new('RGB', (width, height), bg_color)
-            
-            font_size = max(5, int(8 * scale))
-            try:
-                # Optionally use a nice font if available, fallback to default
-                font = ImageFont.truetype("arial.ttf", font_size)
-            except IOError:
-                font = ImageFont.load_default()
+            data_json = json.dumps(data_matrix.tolist())
+            cumulative_json = json.dumps(cumulative_data_matrix.tolist()) if cumulative_data_matrix is not None else "null"
+            high_json = json.dumps(high_data.tolist()) if high_data is not None else "null"
+            polygons_json = json.dumps(polygons)
 
-            vid_path = f"/tmp/vid_{video_idx}_{fps}_{res_str}_{uuid.uuid4().hex}.mp4"
-            
-            # Using rawvideo over a pipe makes the subprocess lightning fast compared to file writing
-            ffmpeg_cmd = [
-                'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', str(fps),
-                '-i', '-', '-c:v', 'libx264', '-preset', 'fast', '-b:v', '2M',
-                '-pix_fmt', 'yuv420p', vid_path
-            ]
-            
-            progress_bar = st.progress(0, text="Rendering fast video frames...")
-            process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            
-            outline_width = max(1, int(2 * scale))
-            
-            for t in range(n_frames):
-                if t % 50 == 0:
-                    pct = int((t / n_frames) * 100)
-                    progress_bar.progress(pct, text=f"Rendering fast video frames... ({pct}%)")
+            fs_main = max(5, int(8*scale)) if mode == "individual" else max(5, int(9*scale))
+            fs_bold = max(6, int(10*scale))
+            line_w = max(1, int(2*scale))
+
+            html_code = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body {{ background-color: #0E1117; color: white; font-family: sans-serif; margin: 0; padding: 10px; }}
+                    #controls {{ margin-bottom: 15px; display: flex; align-items: center; gap: 15px; background: #1E1E1E; padding: 10px; border-radius: 8px; }}
+                    button {{ background: #EF4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }}
+                    button:hover {{ background: #DC2626; }}
+                    input[type=range] {{ flex-grow: 1; accent-color: #EF4444; }}
+                    canvas {{ border: 1px solid #333; border-radius: 8px; }}
+                    #frameLabel {{ min-width: 80px; font-variant-numeric: tabular-nums; }}
+                </style>
+            </head>
+            <body>
+                <div id="controls">
+                    <button id="playBtn">Play</button>
+                    <button id="pauseBtn">Pause</button>
+                    <input type="range" id="frameSlider" min="0" max="{data_matrix.shape[1]-1}" value="0">
+                    <span id="frameLabel">Frame: 0</span>
+                </div>
+                <canvas id="hexCanvas" width="{width}" height="{height}"></canvas>
+
+                <script>
+                    const data = {data_json};
+                    const cumulativeData = {cumulative_json};
+                    const highData = {high_json};
+                    const polygons = {polygons_json};
+                    const mode = "{mode}";
+                    const n_vids = {n_vids};
                     
-                img = base_img.copy()
-                draw = ImageDraw.Draw(img)
-                
-                for i in range(n_neurons):
-                    val = data[i, t]
-                    color = (239, 68, 68) if val == 1 else (30, 30, 30)
-                    draw.polygon(polygons[i], fill=color, outline=(85, 85, 85), width=outline_width)
-                    tot = cumulative_data[i, t]
+                    const canvas = document.getElementById('hexCanvas');
+                    const ctx = canvas.getContext('2d');
+                    const frameSlider = document.getElementById('frameSlider');
+                    const frameLabel = document.getElementById('frameLabel');
                     
-                    # centering text securely using anchor="mm"
-                    txt = f"{tot}"
-                    draw.text((centers[i][0], centers[i][1]), txt, fill=(255,255,255), font=font, anchor="mm")
+                    let currentFrame = 0;
+                    const totalFrames = {data_matrix.shape[1]};
+                    let isPlaying = false;
+                    let lastTime = 0;
+                    const fpsInterval = 1000 / {fps};
                     
-                process.stdin.write(img.tobytes())
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
 
-            process.stdin.close()
-            process.wait()
-            progress_bar.empty()
-            
-            with open(vid_path, "rb") as f:
-                video_bytes = f.read()
-            
-            if os.path.exists(vid_path):
-                os.remove(vid_path)
-                
-            return video_bytes
+                    function drawPolygon(points, fillStyle, strokeStyle, lineWidth) {{
+                        ctx.beginPath();
+                        ctx.moveTo(points[0][0], points[0][1]);
+                        for(let i=1; i<points.length; i++) {{
+                            ctx.lineTo(points[i][0], points[i][1]);
+                        }}
+                        ctx.closePath();
+                        ctx.fillStyle = fillStyle;
+                        ctx.fill();
+                        ctx.lineWidth = lineWidth;
+                        ctx.strokeStyle = strokeStyle;
+                        ctx.stroke();
+                    }}
 
-        def _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1280, height=720, scale=1.0):
-            n_neurs = _data_array.shape[1]
-            agg_data = np.sum(_data_array, axis=0)
-            current_data = agg_data[:, frame_idx]
-            
-            hex_radius = 35 * scale
+                    function renderFrame() {{
+                        ctx.fillStyle = '#0E1117';
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        
+                        for(let i=0; i<polygons.length; i++) {{
+                            const val = data[i][currentFrame];
+                            const pts = polygons[i];
+                            
+                            let cx = 0, cy = 0;
+                            for(let p of pts) {{ cx += p[0]; cy += p[1]; }}
+                            cx /= pts.length;
+                            cy /= pts.length;
 
-            cols = 16
-            centers = []
-            for i in range(n_neurs):
-                r = i // cols
-                c = i % cols
-                x = c * hex_radius * 1.732 + (r % 2) * hex_radius * 0.866
-                y = r * hex_radius * 1.5
-                centers.append((x, y))
+                            if (mode === "individual") {{
+                                const color = val === 1 ? 'rgb(239, 68, 68)' : 'rgb(30, 30, 30)';
+                                drawPolygon(pts, color, 'rgb(85, 85, 85)', {line_w});
+                                
+                                const tot = cumulativeData[i][currentFrame];
+                                ctx.fillStyle = 'white';
+                                ctx.font = "{fs_main}px Arial";
+                                ctx.fillText(tot.toString(), cx, cy);
+                            }} else {{
+                                const ratio = val / Math.max(1, n_vids);
+                                const r = Math.floor(30 + ratio * (239 - 30));
+                                const g = Math.floor(30 + ratio * (68 - 30));
+                                const b = Math.floor(30 + ratio * (68 - 30));
+                                const color = `rgb(${{r}}, ${{g}}, ${{b}})`;
+                                
+                                drawPolygon(pts, color, 'rgb(85, 85, 85)', {line_w});
+                                
+                                const high = highData[i];
+                                const pct = (val / n_vids * 100).toFixed(0) + '%';
+                                const countStr = val + "/" + n_vids;
+                                
+                                ctx.fillStyle = 'white';
+                                ctx.font = "bold {fs_bold}px Arial";
+                                ctx.fillText("H: " + high, cx, cy - {int(9*scale)});
+                                
+                                ctx.font = "{fs_main}px Arial";
+                                ctx.fillText(countStr, cx, cy + {int(1*scale)});
+                                ctx.fillText(pct, cx, cy + {int(10*scale)});
+                            }}
+                        }}
+                    }}
 
-            min_x = min(c[0] for c in centers)
-            max_x = max(c[0] for c in centers)
-            min_y = min(c[1] for c in centers)
-            max_y = max(c[1] for c in centers)
-            shift_x = (width - (max_x - min_x)) / 2 - min_x
-            shift_y = (height - (max_y - min_y)) / 2 - min_y
+                    function loop(time) {{
+                        if (!isPlaying) return;
+                        
+                        const elapsed = time - lastTime;
+                        if (elapsed > fpsInterval) {{
+                            lastTime = time - (elapsed % fpsInterval);
+                            currentFrame++;
+                            if (currentFrame >= totalFrames) {{
+                                currentFrame = 0;
+                                isPlaying = false; 
+                                renderFrame();
+                                return;
+                            }}
+                            frameSlider.value = currentFrame;
+                            frameLabel.textContent = "Frame: " + currentFrame;
+                            renderFrame();
+                        }}
+                        requestAnimationFrame(loop);
+                    }}
 
-            centers = [(int(x + shift_x), int(y + shift_y)) for x, y in centers]
-
-            polygons = []
-            for cx, cy in centers:
-                points = []
-                for j in range(6):
-                    angle = 2 * np.pi / 6 * (j + 0.5)
-                    px = cx + hex_radius * np.cos(angle)
-                    py = cy + hex_radius * np.sin(angle)
-                    points.append((px, py))
-                polygons.append(points)
-
-            bg_color = (14, 17, 23)
-            img = Image.new('RGB', (width, height), bg_color)
-            draw = ImageDraw.Draw(img)
-            
-            fs1 = max(5, int(9 * scale))
-            fs2 = max(6, int(10 * scale))
-            try:
-                font = ImageFont.truetype("arial.ttf", fs1)
-                font_bold = ImageFont.truetype("arialbd.ttf", fs2)
-            except IOError:
-                font = font_bold = ImageFont.load_default()
-                
-            outline_w = max(1, int(2 * scale))
-            
-            for i in range(n_neurs):
-                count = current_data[i]
-                high_count = high_data[i]
-                
-                # Interpolate color between dark grey (30,30,30) and red (239,68,68) based on ratio
-                ratio = count / max(1, n_vids)
-                r_col = int(30 + ratio * (239 - 30))
-                g_col = int(30 + ratio * (68 - 30))
-                b_col = int(30 + ratio * (68 - 30))
-                fill_color = (r_col, g_col, b_col)
-                
-                draw.polygon(polygons[i], fill=fill_color, outline=(85, 85, 85), width=outline_w)
-                
-                pct = (count / n_vids) * 100
-                txt1 = f"H: {high_count}"
-                txt2 = f"{count}/{n_vids}"
-                txt3 = f"{pct:.0f}%"
-                
-                cx, cy = centers[i]
-                
-                # using anchor="mm" to mathematically center text inside boundaries
-                draw.text((cx, cy - int(9 * scale)), txt1, fill=(255,255,255), font=font_bold, anchor="mm")
-                draw.text((cx, cy + int(1 * scale)), txt2, fill=(255,255,255), font=font, anchor="mm")
-                draw.text((cx, cy + int(10 * scale)), txt3, fill=(255,255,255), font=font, anchor="mm")
-                
-            return img
-
-        @st.cache_data(show_spinner=False, persist=True)
-        def plot_aggregate_frame(_data_array, frame_idx):
-            high_data = np.max(np.sum(_data_array, axis=0), axis=1)
-            n_vids = _data_array.shape[0]
-            # Extra large for static frame explorer
-            return _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1600, height=900, scale=1.5)
-
-        @st.cache_data(show_spinner=False, persist=True)
-        def generate_aggregate_video(_data_array, res_str, fps):
-            n_vids, n_neurs, n_frms = _data_array.shape
-            high_data = np.max(np.sum(_data_array, axis=0), axis=1)
-
-            target_h = int(res_str.replace('p', ''))
-            scale = target_h / 720.0
-            width, height = int(1280 * scale), target_h
-            # Make sure width and height are even for ffmpeg yuv420p
-            width = width if width % 2 == 0 else width + 1
-            height = height if height % 2 == 0 else height + 1
-
-            vid_path = f"/tmp/agg_vid_{fps}_{res_str}_{uuid.uuid4().hex}.mp4"
-            
-            ffmpeg_cmd = [
-                'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', str(fps),
-                '-i', '-', '-c:v', 'libx264', '-preset', 'fast', '-b:v', '4M',
-                '-pix_fmt', 'yuv420p', vid_path
-            ]
-            
-            progress_bar = st.progress(0, text="Rendering fast aggregate video frames...")
-            process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            
-            for t in range(n_frms):
-                if t % 50 == 0:
-                    pct = int((t / n_frms) * 100)
-                    progress_bar.progress(pct, text=f"Rendering fast aggregate video frames... ({pct}%)")
+                    document.getElementById('playBtn').addEventListener('click', () => {{
+                        if (!isPlaying) {{
+                            isPlaying = true;
+                            if (currentFrame >= totalFrames - 1) currentFrame = 0;
+                            lastTime = performance.now();
+                            requestAnimationFrame(loop);
+                        }}
+                    }});
                     
-                img = _draw_aggregate_frame(_data_array, t, high_data, n_vids, width=width, height=height, scale=scale)
-                process.stdin.write(img.tobytes())
-                
-            process.stdin.close()
-            process.wait()
-            progress_bar.empty()
-            
-            with open(vid_path, "rb") as f:
-                video_bytes = f.read()
-            
-            if os.path.exists(vid_path):
-                os.remove(vid_path)
-                
-            return video_bytes
+                    document.getElementById('pauseBtn').addEventListener('click', () => {{
+                        isPlaying = false;
+                    }});
+
+                    frameSlider.addEventListener('input', (e) => {{
+                        currentFrame = parseInt(e.target.value);
+                        frameLabel.textContent = "Frame: " + currentFrame;
+                        renderFrame();
+                    }});
+                    
+                    renderFrame();
+                </script>
+            </body>
+            </html>
+            """
+            components.html(html_code, height=height + 80)
 
         tab1, tab2 = st.tabs(["Individual Video Playback", "Aggregate Activity Playback"])
 
         with tab1:
             st.subheader(f"Video {selected_video} Playback")
             st.markdown("The number on each neuron represents the **total accumulative firings** until the current frame.")
-            if st.button("Render Individual Video", key="btn_indv", type="primary"):
-                with st.spinner(f"Generating optimized playback for Video {selected_video}..."):
-                    video_bytes = generate_video(selected_video, bint, resolution, fps_speed)
-                st.video(video_bytes)
+            
+            target_h = int(resolution.replace('p', ''))
+            scale_indv = target_h / 500.0
+            
+            data_indv = bint[selected_video]
+            cumulative_indv = np.cumsum(data_indv, axis=1)
+            
+            render_html5_viewer(data_indv, cumulative_indv, None, fps_speed, mode="individual", scale=scale_indv)
             
         with tab2:
-            st.subheader("Aggregated Neural Firing Over All Videos")
-            st.markdown("This video shows the summation of neuron firings across all 297 videos. Observe the entire clip below, and use the **Frame Explorer** to scrub frame-by-frame without skipping values.")
+            st.subheader("Aggregated Neural Firing HTML5 Canvas")
+            st.markdown("This canvas maps the summation of neuron firings across all 297 videos instantly directly in your browser. Use the native Play controls below.")
             
-            if st.button("Render Aggregate Video", key="btn_agg", type="primary"):
-                with st.spinner("Generating crisp, high-res aggregated playback (~5 seconds)..."):
-                    agg_video_bytes = generate_aggregate_video(bint, resolution, fps_speed)
-                st.video(agg_video_bytes)
-
-            st.markdown("---")
-            st.subheader("Frame-by-Frame Static Explorer")
-            frame_slider = st.slider("Select Exact Frame", min_value=0, max_value=n_frames-1, value=0, step=1)
+            target_h_agg = int(resolution.replace('p', ''))
+            scale_agg = target_h_agg / 720.0
             
-            # Using st.image since we return a PIL Image now
-            img_frame = plot_aggregate_frame(bint, frame_slider)
-            st.image(img_frame, use_column_width=True)
+            n_vids = bint.shape[0]
+            agg_data = np.sum(bint, axis=0)
+            high_data = np.max(agg_data, axis=1)
+            
+            render_html5_viewer(agg_data, None, high_data, fps_speed, mode="aggregate", scale=scale_agg, n_vids=n_vids)
 
 else:
     st.info("Awaiting file upload. Please select a `.mat` file from the sidebar.")

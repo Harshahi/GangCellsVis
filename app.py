@@ -100,13 +100,53 @@ if uploaded_file is not None:
             return video_bytes
 
         @st.cache_data(show_spinner=False)
+        def plot_aggregate_frame(_data_array, frame_idx):
+            n_vids, n_neurs, n_frms = _data_array.shape
+            agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
+            current_data = agg_data[:, frame_idx]
+            
+            # Create high-res matplotlib figure
+            fig, ax = plt.subplots(figsize=(15, 9), dpi=120)
+            fig.patch.set_facecolor('#0E1117')
+            ax.set_facecolor('#0E1117')
+            
+            cols = 16
+            rows = int(np.ceil(n_neurs / cols))
+
+            patches = []
+            # Build larger hex grid (pointy-topped)
+            hex_radius = 0.5 / np.sqrt(3) * 1.05 # slightly larger
+            for i in range(n_neurs):
+                r = i // cols
+                c = i % cols
+                x = c + (r % 2) * 0.5
+                y = r * np.sqrt(3) / 2
+                patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
+                
+                count = current_data[i]
+                pct = (count / n_vids) * 100
+                ax.text(x, y, f"{count}/{n_vids}\n{pct:.0f}%", ha='center', va='center', color='white', fontsize=7, fontweight='bold')
+
+            cmap = mcolors.LinearSegmentedColormap.from_list("agg_red", ['#1E1E1E', '#EF4444'])
+            
+            collection = PatchCollection(patches, cmap=cmap, edgecolor='#555555', linewidth=1.5)
+            collection.set_array(current_data)
+            collection.set_clim(0, n_vids)
+            ax.add_collection(collection)
+            
+            ax.set_aspect('equal')
+            ax.axis('off')
+            ax.autoscale_view()
+            return fig
+
+        @st.cache_data(show_spinner=False)
         def generate_aggregate_video(_data_array):
             n_vids, n_neurs, n_frms = _data_array.shape
             agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
             
-            # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(10, 6))
-            fig.patch.set_facecolor('#0E1117')  # Match Streamlit dark theme
+            # Create high-res matplotlib figure for video
+            fig, ax = plt.subplots(figsize=(15, 9), dpi=120)
+            fig.patch.set_facecolor('#0E1117')
             ax.set_facecolor('#0E1117')
             
             cols = 16
@@ -114,20 +154,21 @@ if uploaded_file is not None:
 
             patches = []
             texts = []
-            # Build hex grid (pointy-topped)
+            
+            hex_radius = 0.5 / np.sqrt(3) * 1.05 # slightly larger
+            
             for i in range(n_neurs):
                 r = i // cols
                 c = i % cols
                 x = c + (r % 2) * 0.5
                 y = r * np.sqrt(3) / 2
-                patches.append(RegularPolygon((x, y), numVertices=6, radius=0.5/np.sqrt(3), orientation=np.pi/2))
-                txt = ax.text(x, y, "", ha='center', va='center', color='white', fontsize=4, fontweight='bold')
+                patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
+                txt = ax.text(x, y, "", ha='center', va='center', color='white', fontsize=7, fontweight='bold')
                 texts.append(txt)
 
-            # Continuous colormap from dark grey to red
             cmap = mcolors.LinearSegmentedColormap.from_list("agg_red", ['#1E1E1E', '#EF4444'])
             
-            collection = PatchCollection(patches, cmap=cmap, edgecolor='#333333', linewidth=1)
+            collection = PatchCollection(patches, cmap=cmap, edgecolor='#555555', linewidth=1.5)
             collection.set_array(agg_data[:, 0])
             collection.set_clim(0, n_vids)
             ax.add_collection(collection)
@@ -151,18 +192,16 @@ if uploaded_file is not None:
                     texts[i].set_text(f"{count}/{n_vids}\n{pct:.0f}%")
                 return [collection] + texts
 
-            # Generate animation
+            # Generate animation (use higher bitrate for quality)
             ani = animation.FuncAnimation(fig, update, frames=n_frms, init_func=init, blit=True)
             
-            # Save to a temporary file, then read bytes
             vid_path = f"/tmp/agg_vid_{uuid.uuid4().hex}.mp4"
-            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264'])
+            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264', '-b:v', '5M'])
             plt.close(fig)
             
             with open(vid_path, "rb") as f:
                 video_bytes = f.read()
             
-            # Cleanup temp file
             if os.path.exists(vid_path):
                 os.remove(vid_path)
                 
@@ -178,10 +217,19 @@ if uploaded_file is not None:
             
         with tab2:
             st.subheader("Aggregated Neural Firing Over All Videos")
-            st.markdown("This video shows the summation of neuron firings across all 297 videos for each frame. The numbers on each hexagon indicate the fraction and percentage of videos in which that cell fired.")
-            with st.spinner("Generating aggregated playback (takes ~15-30 seconds the first time via matplotlib rendering)..."):
+            st.markdown("This video shows the summation of neuron firings across all 297 videos. Observe the entire clip below, and use the **Frame Explorer** to scrub frame-by-frame without skipping values.")
+            
+            with st.spinner("Generating crisp, high-res aggregated playback (takes ~15-30 seconds the first time)..."):
                 agg_video_bytes = generate_aggregate_video(bint)
             st.video(agg_video_bytes)
+
+            st.markdown("---")
+            st.subheader("Frame-by-Frame Explorer")
+            frame_slider = st.slider("Select Exact Frame", min_value=0, max_value=n_frames-1, value=0, step=1)
+            
+            with st.spinner(f"Rendering frame {frame_slider}..."):
+                fig_frame = plot_aggregate_frame(bint, frame_slider)
+                st.pyplot(fig_frame)
 
 else:
     st.info("Awaiting file upload. Please select a `.mat` file from the sidebar.")

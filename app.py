@@ -46,6 +46,7 @@ if uploaded_file is not None:
 
         import json
         import streamlit.components.v1 as components
+        import pandas as pd
 
         # Sidebar config
         st.sidebar.markdown("---")
@@ -300,6 +301,16 @@ if uploaded_file is not None:
             high_data = np.max(agg_data, axis=1)
             
             render_html5_viewer(agg_data, None, high_data, fps_speed, mode="aggregate", scale=scale_agg, n_vids=n_vids)
+
+            st.markdown("---")
+            st.subheader("Maximum Concurrent Firings per Neuron (H)")
+            
+            chart_data = pd.DataFrame(
+                high_data,
+                columns=["High Firings (H)"]
+            )
+            chart_data.index.name = "Neuron Index"
+            st.bar_chart(chart_data, y="High Firings (H)", use_container_width=True)
 
 else:
     st.info("Awaiting file upload. Please select a `.mat` file from the sidebar.")

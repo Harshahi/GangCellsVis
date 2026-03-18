@@ -47,6 +47,7 @@ if uploaded_file is not None:
         import json
         import streamlit.components.v1 as components
         import pandas as pd
+        import altair as alt
 
         # Sidebar config
         st.sidebar.markdown("---")
@@ -324,7 +325,13 @@ if uploaded_file is not None:
             elif sort_order == "Ascending (Low to High)":
                 chart_data = chart_data.sort_values(by="High Firings (H)", ascending=True)
                 
-            st.bar_chart(chart_data, x="Neuron", y="High Firings (H)", use_container_width=True)
+            # Force Altair Vega backend to obey our exact array ordering
+            c = alt.Chart(chart_data).mark_bar().encode(
+                x=alt.X("Neuron", sort=chart_data["Neuron"].tolist(), title="Neuron Index"),
+                y=alt.Y("High Firings (H)", title="High Firings"),
+                tooltip=["Neuron", "High Firings (H)"]
+            )
+            st.altair_chart(c, use_container_width=True)
             
             csv = chart_data.to_csv().encode('utf-8')
             with col2:

@@ -48,9 +48,9 @@ if uploaded_file is not None:
         st.sidebar.markdown("---")
         st.sidebar.subheader("Rendering Settings")
         
-        res_scale = st.sidebar.slider(
-            "Resolution Scale", min_value=0.25, max_value=2.0, value=1.0, step=0.25,
-            help="1.0x is 800x500. Lower is faster but blurrier."
+        resolution = st.sidebar.selectbox(
+            "Video Resolution", ["360p", "480p", "720p", "1080p"], index=2,
+            help="Select the target video height. Higher resolutions are sharper but take slightly longer to render."
         )
         fps_speed = st.sidebar.slider(
             "Playback Speed (FPS)", min_value=10, max_value=100, value=50, step=5,
@@ -58,11 +58,17 @@ if uploaded_file is not None:
         )
 
         @st.cache_data(show_spinner=False, persist=True)
-        def generate_video(video_idx, _data_array, scale, fps):
+        def generate_video(video_idx, _data_array, res_str, fps):
             data = _data_array[video_idx] # Shape: (160, 953)
             cumulative_data = np.cumsum(data, axis=1) # Shape: (160, 953)
             
-            width, height = int(800 * scale), int(500 * scale)
+            target_h = int(res_str.replace('p', ''))
+            scale = target_h / 500.0
+            width, height = int(800 * scale), target_h
+            # Make sure width and height are even for ffmpeg yuv420p
+            width = width if width % 2 == 0 else width + 1
+            height = height if height % 2 == 0 else height + 1
+            
             hex_radius = 20 * scale
 
             cols = 16
@@ -105,7 +111,7 @@ if uploaded_file is not None:
             except IOError:
                 font = ImageFont.load_default()
 
-            vid_path = f"/tmp/vid_{video_idx}_{fps}_{scale}_{uuid.uuid4().hex}.mp4"
+            vid_path = f"/tmp/vid_{video_idx}_{fps}_{res_str}_{uuid.uuid4().hex}.mp4"
             
             # Using rawvideo over a pipe makes the subprocess lightning fast compared to file writing
             ffmpeg_cmd = [
@@ -244,12 +250,18 @@ if uploaded_file is not None:
             return _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1600, height=900, scale=1.5)
 
         @st.cache_data(show_spinner=False, persist=True)
-        def generate_aggregate_video(_data_array, scale, fps):
+        def generate_aggregate_video(_data_array, res_str, fps):
             n_vids, n_neurs, n_frms = _data_array.shape
             high_data = np.max(np.sum(_data_array, axis=0), axis=1)
 
-            vid_path = f"/tmp/agg_vid_{fps}_{scale}_{uuid.uuid4().hex}.mp4"
-            width, height = int(1280 * scale), int(720 * scale)
+            target_h = int(res_str.replace('p', ''))
+            scale = target_h / 720.0
+            width, height = int(1280 * scale), target_h
+            # Make sure width and height are even for ffmpeg yuv420p
+            width = width if width % 2 == 0 else width + 1
+            height = height if height % 2 == 0 else height + 1
+
+            vid_path = f"/tmp/agg_vid_{fps}_{res_str}_{uuid.uuid4().hex}.mp4"
             
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
@@ -287,7 +299,7 @@ if uploaded_file is not None:
             st.subheader(f"Video {selected_video} Playback")
             if st.button("Render Individual Video", key="btn_indv", type="primary"):
                 with st.spinner(f"Generating optimized playback for Video {selected_video}..."):
-                    video_bytes = generate_video(selected_video, bint, res_scale, fps_speed)
+                    video_bytes = generate_video(selected_video, bint, resolution, fps_speed)
                 st.video(video_bytes)
             
         with tab2:
@@ -296,7 +308,7 @@ if uploaded_file is not None:
             
             if st.button("Render Aggregate Video", key="btn_agg", type="primary"):
                 with st.spinner("Generating crisp, high-res aggregated playback (~5 seconds)..."):
-                    agg_video_bytes = generate_aggregate_video(bint, res_scale, fps_speed)
+                    agg_video_bytes = generate_aggregate_video(bint, resolution, fps_speed)
                 st.video(agg_video_bytes)
 
             st.markdown("---")
@@ -305,7 +317,7 @@ if uploaded_file is not None:
             
             # Using st.image since we return a PIL Image now
             img_frame = plot_aggregate_frame(bint, frame_slider)
-            st.image(img_frame, use_container_width=True)
+            st.image(img_frame, use_column_width=True)
 
 else:
     st.info("Awaiting file upload. Please select a `.mat` file from the sidebar.")

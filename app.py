@@ -141,8 +141,8 @@ if uploaded_file is not None:
                     tot = cumulative_data[i, t]
                     
                     # centering text securely using anchor="mm"
-                    txt = f"Total\n{tot}"
-                    draw.multiline_text((centers[i][0], centers[i][1]), txt, fill=(255,255,255), font=font, anchor="mm", align="center")
+                    txt = f"{tot}"
+                    draw.text((centers[i][0], centers[i][1]), txt, fill=(255,255,255), font=font, anchor="mm")
                     
                 process.stdin.write(img.tobytes())
 
@@ -289,6 +289,7 @@ if uploaded_file is not None:
 
         with tab1:
             st.subheader(f"Video {selected_video} Playback")
+            st.markdown("The number on each neuron represents the **total accumulative firings** until the current frame.")
             if st.button("Render Individual Video", key="btn_indv", type="primary"):
                 with st.spinner(f"Generating optimized playback for Video {selected_video}..."):
                     video_bytes = generate_video(selected_video, bint, resolution, fps_speed)

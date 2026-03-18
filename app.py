@@ -317,14 +317,14 @@ if uploaded_file is not None:
                 high_data,
                 columns=["High Firings (H)"]
             )
-            chart_data.index.name = "Neuron Index"
+            chart_data["Neuron"] = chart_data.index.astype(str)
             
             if sort_order == "Descending (High to Low)":
                 chart_data = chart_data.sort_values(by="High Firings (H)", ascending=False)
             elif sort_order == "Ascending (Low to High)":
                 chart_data = chart_data.sort_values(by="High Firings (H)", ascending=True)
                 
-            st.bar_chart(chart_data, y="High Firings (H)", use_container_width=True)
+            st.bar_chart(chart_data, x="Neuron", y="High Firings (H)", use_container_width=True)
             
             csv = chart_data.to_csv().encode('utf-8')
             with col2:

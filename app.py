@@ -121,7 +121,8 @@ if uploaded_file is not None:
                     button:hover {{ background: #DC2626; }}
                     input[type=range] {{ flex-grow: 1; accent-color: #EF4444; }}
                     canvas {{ border: 1px solid #333; border-radius: 8px; }}
-                    #frameLabel {{ min-width: 80px; font-variant-numeric: tabular-nums; }}
+                    #frameInput {{ width: 60px; background: #333; color: white; border: 1px solid #555; padding: 4px; border-radius: 4px; text-align: center; }}
+                    #frameInput:focus {{ outline: none; border-color: #EF4444; }}
                 </style>
             </head>
             <body>
@@ -129,7 +130,8 @@ if uploaded_file is not None:
                     <button id="playBtn">Play</button>
                     <button id="pauseBtn">Pause</button>
                     <input type="range" id="frameSlider" min="0" max="{data_matrix.shape[1]-1}" value="0">
-                    <span id="frameLabel">Frame: 0</span>
+                    <span>Frame:</span>
+                    <input type="number" id="frameInput" min="0" max="{data_matrix.shape[1]-1}" value="0">
                 </div>
                 <canvas id="hexCanvas" width="{width}" height="{height}"></canvas>
 
@@ -144,7 +146,7 @@ if uploaded_file is not None:
                     const canvas = document.getElementById('hexCanvas');
                     const ctx = canvas.getContext('2d');
                     const frameSlider = document.getElementById('frameSlider');
-                    const frameLabel = document.getElementById('frameLabel');
+                    const frameInput = document.getElementById('frameInput');
                     
                     let currentFrame = 0;
                     const totalFrames = {data_matrix.shape[1]};
@@ -228,7 +230,7 @@ if uploaded_file is not None:
                                 return;
                             }}
                             frameSlider.value = currentFrame;
-                            frameLabel.textContent = "Frame: " + currentFrame;
+                            frameInput.value = currentFrame;
                             renderFrame();
                         }}
                         requestAnimationFrame(loop);
@@ -249,7 +251,19 @@ if uploaded_file is not None:
 
                     frameSlider.addEventListener('input', (e) => {{
                         currentFrame = parseInt(e.target.value);
-                        frameLabel.textContent = "Frame: " + currentFrame;
+                        frameInput.value = currentFrame;
+                        renderFrame();
+                    }});
+                    
+                    frameInput.addEventListener('change', (e) => {{
+                        let val = parseInt(e.target.value);
+                        if (isNaN(val)) val = 0;
+                        if (val < 0) val = 0;
+                        if (val >= totalFrames) val = totalFrames - 1;
+                        
+                        currentFrame = val;
+                        e.target.value = val;
+                        frameSlider.value = val;
                         renderFrame();
                     }});
                     

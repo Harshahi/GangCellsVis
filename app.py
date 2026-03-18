@@ -44,13 +44,26 @@ if uploaded_file is not None:
         from PIL import Image, ImageDraw, ImageFont
         import subprocess
 
+        # Sidebar config
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Rendering Settings")
+        
+        res_scale = st.sidebar.slider(
+            "Resolution Scale", min_value=0.25, max_value=2.0, value=1.0, step=0.25,
+            help="1.0x is 800x500. Lower is faster but blurrier."
+        )
+        fps_speed = st.sidebar.slider(
+            "Playback Speed (FPS)", min_value=10, max_value=100, value=50, step=5,
+            help="Playback speed of the exported MP4 video."
+        )
+
         @st.cache_data(show_spinner=False, persist=True)
-        def generate_video(video_idx, _data_array):
+        def generate_video(video_idx, _data_array, scale, fps):
             data = _data_array[video_idx] # Shape: (160, 953)
             cumulative_data = np.cumsum(data, axis=1) # Shape: (160, 953)
             
-            width, height = 800, 500
-            hex_radius = 20
+            width, height = int(800 * scale), int(500 * scale)
+            hex_radius = 20 * scale
 
             cols = 16
             rows = int(np.ceil(n_neurons / cols))
@@ -85,23 +98,27 @@ if uploaded_file is not None:
             bg_color = (14, 17, 23)
             base_img = Image.new('RGB', (width, height), bg_color)
             
+            font_size = max(6, int(10 * scale))
             try:
                 # Optionally use a nice font if available, fallback to default
-                font = ImageFont.truetype("arial.ttf", 10)
+                font = ImageFont.truetype("arial.ttf", font_size)
             except IOError:
                 font = ImageFont.load_default()
 
-            vid_path = f"/tmp/vid_{video_idx}_{uuid.uuid4().hex}.mp4"
+            vid_path = f"/tmp/vid_{video_idx}_{fps}_{scale}_{uuid.uuid4().hex}.mp4"
             
+            # Using rawvideo over a pipe makes the subprocess lightning fast compared to file writing
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', '50',
+                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', str(fps),
                 '-i', '-', '-c:v', 'libx264', '-preset', 'fast', '-b:v', '2M',
                 '-pix_fmt', 'yuv420p', vid_path
             ]
             
             progress_bar = st.progress(0, text="Rendering fast video frames...")
             process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            
+            outline_width = max(1, int(2 * scale))
             
             for t in range(n_frames):
                 if t % 50 == 0:
@@ -114,12 +131,15 @@ if uploaded_file is not None:
                 for i in range(n_neurons):
                     val = data[i, t]
                     color = (239, 68, 68) if val == 1 else (30, 30, 30)
-                    draw.polygon(polygons[i], fill=color, outline=(85, 85, 85), width=2)
+                    draw.polygon(polygons[i], fill=color, outline=(85, 85, 85), width=outline_width)
                     tot = cumulative_data[i, t]
                     
                     # centering text roughly
                     txt = f"Total: {tot}"
-                    draw.text((centers[i][0]-18, centers[i][1]-6), txt, fill=(255,255,255), font=font)
+                    
+                    text_x_offset = int(18 * scale)
+                    text_y_offset = int(6 * scale)
+                    draw.text((centers[i][0]-text_x_offset, centers[i][1]-text_y_offset), txt, fill=(255,255,255), font=font)
                     
                 process.stdin.write(img.tobytes())
 
@@ -135,12 +155,12 @@ if uploaded_file is not None:
                 
             return video_bytes
 
-        def _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1280, height=720):
+        def _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1280, height=720, scale=1.0):
             n_neurs = _data_array.shape[1]
             agg_data = np.sum(_data_array, axis=0)
             current_data = agg_data[:, frame_idx]
             
-            hex_radius = 35 # larger for 720p
+            hex_radius = 35 * scale
 
             cols = 16
             centers = []
@@ -174,12 +194,16 @@ if uploaded_file is not None:
             img = Image.new('RGB', (width, height), bg_color)
             draw = ImageDraw.Draw(img)
             
+            fs1 = max(6, int(12 * scale))
+            fs2 = max(8, int(13 * scale))
             try:
-                font = ImageFont.truetype("arial.ttf", 12)
-                font_bold = ImageFont.truetype("arialbd.ttf", 13)
+                font = ImageFont.truetype("arial.ttf", fs1)
+                font_bold = ImageFont.truetype("arialbd.ttf", fs2)
             except IOError:
                 font = font_bold = ImageFont.load_default()
                 
+            outline_w = max(1, int(2 * scale))
+            
             for i in range(n_neurs):
                 count = current_data[i]
                 high_count = high_data[i]
@@ -191,7 +215,7 @@ if uploaded_file is not None:
                 b_col = int(30 + ratio * (68 - 30))
                 fill_color = (r_col, g_col, b_col)
                 
-                draw.polygon(polygons[i], fill=fill_color, outline=(85, 85, 85), width=2)
+                draw.polygon(polygons[i], fill=fill_color, outline=(85, 85, 85), width=outline_w)
                 
                 pct = (count / n_vids) * 100
                 txt1 = f"High: {high_count}"
@@ -199,9 +223,16 @@ if uploaded_file is not None:
                 txt3 = f"{pct:.0f}%"
                 
                 cx, cy = centers[i]
-                draw.text((cx-20, cy-15), txt1, fill=(255,255,255), font=font_bold)
-                draw.text((cx-18, cy), txt2, fill=(255,255,255), font=font)
-                draw.text((cx-12, cy+15), txt3, fill=(255,255,255), font=font)
+                offset_x1 = int(-20 * scale)
+                offset_y1 = int(-15 * scale)
+                offset_x2 = int(-18 * scale)
+                offset_y2 = 0
+                offset_x3 = int(-12 * scale)
+                offset_y3 = int(15 * scale)
+                
+                draw.text((cx+offset_x1, cy+offset_y1), txt1, fill=(255,255,255), font=font_bold)
+                draw.text((cx+offset_x2, cy+offset_y2), txt2, fill=(255,255,255), font=font)
+                draw.text((cx+offset_x3, cy+offset_y3), txt3, fill=(255,255,255), font=font)
                 
             return img
 
@@ -210,19 +241,19 @@ if uploaded_file is not None:
             high_data = np.max(np.sum(_data_array, axis=0), axis=1)
             n_vids = _data_array.shape[0]
             # Extra large for static frame explorer
-            return _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1600, height=900)
+            return _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1600, height=900, scale=1.5)
 
         @st.cache_data(show_spinner=False, persist=True)
-        def generate_aggregate_video(_data_array):
+        def generate_aggregate_video(_data_array, scale, fps):
             n_vids, n_neurs, n_frms = _data_array.shape
             high_data = np.max(np.sum(_data_array, axis=0), axis=1)
 
-            vid_path = f"/tmp/agg_vid_{uuid.uuid4().hex}.mp4"
-            width, height = 1280, 720
+            vid_path = f"/tmp/agg_vid_{fps}_{scale}_{uuid.uuid4().hex}.mp4"
+            width, height = int(1280 * scale), int(720 * scale)
             
             ffmpeg_cmd = [
                 'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', '50',
+                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', str(fps),
                 '-i', '-', '-c:v', 'libx264', '-preset', 'fast', '-b:v', '4M',
                 '-pix_fmt', 'yuv420p', vid_path
             ]
@@ -235,7 +266,7 @@ if uploaded_file is not None:
                     pct = int((t / n_frms) * 100)
                     progress_bar.progress(pct, text=f"Rendering fast aggregate video frames... ({pct}%)")
                     
-                img = _draw_aggregate_frame(_data_array, t, high_data, n_vids, width=width, height=height)
+                img = _draw_aggregate_frame(_data_array, t, high_data, n_vids, width=width, height=height, scale=scale)
                 process.stdin.write(img.tobytes())
                 
             process.stdin.close()
@@ -254,20 +285,22 @@ if uploaded_file is not None:
 
         with tab1:
             st.subheader(f"Video {selected_video} Playback")
-            with st.spinner(f"Generating optimized playback for Video {selected_video}..."):
-                video_bytes = generate_video(selected_video, bint)
-            st.video(video_bytes)
+            if st.button("Render Individual Video", key="btn_indv", type="primary"):
+                with st.spinner(f"Generating optimized playback for Video {selected_video}..."):
+                    video_bytes = generate_video(selected_video, bint, res_scale, fps_speed)
+                st.video(video_bytes)
             
         with tab2:
             st.subheader("Aggregated Neural Firing Over All Videos")
             st.markdown("This video shows the summation of neuron firings across all 297 videos. Observe the entire clip below, and use the **Frame Explorer** to scrub frame-by-frame without skipping values.")
             
-            with st.spinner("Generating crisp, high-res aggregated playback (~5 seconds)..."):
-                agg_video_bytes = generate_aggregate_video(bint)
-            st.video(agg_video_bytes)
+            if st.button("Render Aggregate Video", key="btn_agg", type="primary"):
+                with st.spinner("Generating crisp, high-res aggregated playback (~5 seconds)..."):
+                    agg_video_bytes = generate_aggregate_video(bint, res_scale, fps_speed)
+                st.video(agg_video_bytes)
 
             st.markdown("---")
-            st.subheader("Frame-by-Frame Explorer")
+            st.subheader("Frame-by-Frame Static Explorer")
             frame_slider = st.slider("Select Exact Frame", min_value=0, max_value=n_frames-1, value=0, step=1)
             
             # Using st.image since we return a PIL Image now

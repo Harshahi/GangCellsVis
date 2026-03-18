@@ -104,7 +104,7 @@ if uploaded_file is not None:
             bg_color = (14, 17, 23)
             base_img = Image.new('RGB', (width, height), bg_color)
             
-            font_size = max(6, int(10 * scale))
+            font_size = max(5, int(8 * scale))
             try:
                 # Optionally use a nice font if available, fallback to default
                 font = ImageFont.truetype("arial.ttf", font_size)
@@ -140,12 +140,9 @@ if uploaded_file is not None:
                     draw.polygon(polygons[i], fill=color, outline=(85, 85, 85), width=outline_width)
                     tot = cumulative_data[i, t]
                     
-                    # centering text roughly
-                    txt = f"Total: {tot}"
-                    
-                    text_x_offset = int(18 * scale)
-                    text_y_offset = int(6 * scale)
-                    draw.text((centers[i][0]-text_x_offset, centers[i][1]-text_y_offset), txt, fill=(255,255,255), font=font)
+                    # centering text securely using anchor="mm"
+                    txt = f"Total\n{tot}"
+                    draw.multiline_text((centers[i][0], centers[i][1]), txt, fill=(255,255,255), font=font, anchor="mm", align="center")
                     
                 process.stdin.write(img.tobytes())
 
@@ -200,8 +197,8 @@ if uploaded_file is not None:
             img = Image.new('RGB', (width, height), bg_color)
             draw = ImageDraw.Draw(img)
             
-            fs1 = max(6, int(12 * scale))
-            fs2 = max(8, int(13 * scale))
+            fs1 = max(5, int(9 * scale))
+            fs2 = max(6, int(10 * scale))
             try:
                 font = ImageFont.truetype("arial.ttf", fs1)
                 font_bold = ImageFont.truetype("arialbd.ttf", fs2)
@@ -224,21 +221,16 @@ if uploaded_file is not None:
                 draw.polygon(polygons[i], fill=fill_color, outline=(85, 85, 85), width=outline_w)
                 
                 pct = (count / n_vids) * 100
-                txt1 = f"High: {high_count}"
+                txt1 = f"H: {high_count}"
                 txt2 = f"{count}/{n_vids}"
                 txt3 = f"{pct:.0f}%"
                 
                 cx, cy = centers[i]
-                offset_x1 = int(-20 * scale)
-                offset_y1 = int(-15 * scale)
-                offset_x2 = int(-18 * scale)
-                offset_y2 = 0
-                offset_x3 = int(-12 * scale)
-                offset_y3 = int(15 * scale)
                 
-                draw.text((cx+offset_x1, cy+offset_y1), txt1, fill=(255,255,255), font=font_bold)
-                draw.text((cx+offset_x2, cy+offset_y2), txt2, fill=(255,255,255), font=font)
-                draw.text((cx+offset_x3, cy+offset_y3), txt3, fill=(255,255,255), font=font)
+                # using anchor="mm" to mathematically center text inside boundaries
+                draw.text((cx, cy - int(9 * scale)), txt1, fill=(255,255,255), font=font_bold, anchor="mm")
+                draw.text((cx, cy + int(1 * scale)), txt2, fill=(255,255,255), font=font, anchor="mm")
+                draw.text((cx, cy + int(10 * scale)), txt3, fill=(255,255,255), font=font, anchor="mm")
                 
             return img
 

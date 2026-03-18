@@ -41,193 +41,206 @@ if uploaded_file is not None:
         st.sidebar.header("Configuration")
         selected_video = st.sidebar.selectbox("Select Video", options=list(range(n_videos)), index=0)
 
+        from PIL import Image, ImageDraw, ImageFont
+        import subprocess
+
         @st.cache_data(show_spinner=False, persist=True)
         def generate_video(video_idx, _data_array):
             data = _data_array[video_idx] # Shape: (160, 953)
             cumulative_data = np.cumsum(data, axis=1) # Shape: (160, 953)
             
-            # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(10, 6))
-            fig.patch.set_facecolor('#0E1117')  # Match Streamlit dark theme
-            ax.set_facecolor('#0E1117')
-            
+            width, height = 800, 500
+            hex_radius = 20
+
             cols = 16
             rows = int(np.ceil(n_neurons / cols))
 
-            patches = []
-            texts = []
-            
-            hex_radius = 0.5 / np.sqrt(3) * 1.05 # slightly larger
-            
-            # Build hex grid (pointy-topped)
+            centers = []
             for i in range(n_neurons):
                 r = i // cols
                 c = i % cols
-                x = c + (r % 2) * 0.5
-                y = r * np.sqrt(3) / 2
-                patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
-                txt = ax.text(x, y, "", ha='center', va='center', color='white', fontsize=6, fontweight='bold')
-                texts.append(txt)
+                x = c * hex_radius * 1.732 + (r % 2) * hex_radius * 0.866
+                y = r * hex_radius * 1.5
+                centers.append((x, y))
 
-            # Dark grey for resting (0), bright red for firing (1)
-            cmap = mcolors.ListedColormap(['#1E1E1E', '#EF4444'])
+            min_x = min(c[0] for c in centers)
+            max_x = max(c[0] for c in centers)
+            min_y = min(c[1] for c in centers)
+            max_y = max(c[1] for c in centers)
+            shift_x = (width - (max_x - min_x)) / 2 - min_x
+            shift_y = (height - (max_y - min_y)) / 2 - min_y
+
+            centers = [(int(x + shift_x), int(y + shift_y)) for x, y in centers]
+
+            polygons = []
+            for cx, cy in centers:
+                points = []
+                for j in range(6):
+                    angle = 2 * np.pi / 6 * (j + 0.5)
+                    px = cx + hex_radius * np.cos(angle)
+                    py = cy + hex_radius * np.sin(angle)
+                    points.append((px, py))
+                polygons.append(points)
+
+            bg_color = (14, 17, 23)
+            base_img = Image.new('RGB', (width, height), bg_color)
             
-            collection = PatchCollection(patches, cmap=cmap, edgecolor='#333333', linewidth=1)
-            collection.set_array(data[:, 0])
-            collection.set_clim(0, 1)
-            ax.add_collection(collection)
-            
-            ax.set_aspect('equal')
-            ax.axis('off')
-            ax.autoscale_view()
+            try:
+                # Optionally use a nice font if available, fallback to default
+                font = ImageFont.truetype("arial.ttf", 10)
+            except IOError:
+                font = ImageFont.load_default()
 
-            def init():
-                collection.set_array(data[:, 0])
-                for i, count in enumerate(cumulative_data[:, 0]):
-                    texts[i].set_text(f"Total: {count}")
-                return [collection] + texts
-
-            def update(frame):
-                collection.set_array(data[:, frame])
-                for i, count in enumerate(cumulative_data[:, frame]):
-                    texts[i].set_text(f"Total: {count}")
-                return [collection] + texts
-
-            # Generate animation
-            ani = animation.FuncAnimation(fig, update, frames=n_frames, init_func=init, blit=True)
-            
-            # Save to a temporary file, then read bytes
             vid_path = f"/tmp/vid_{video_idx}_{uuid.uuid4().hex}.mp4"
             
-            progress_bar = st.progress(0, text="Rendering individual video frames...")
-            def progress_callback(current_frame, total_frames):
-                pct = int((current_frame / total_frames) * 100)
-                progress_bar.progress(pct, text=f"Rendering individual video frames... ({pct}%)")
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
+                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', '50',
+                '-i', '-', '-c:v', 'libx264', '-preset', 'fast', '-b:v', '2M',
+                '-pix_fmt', 'yuv420p', vid_path
+            ]
             
-            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264', '-b:v', '5M'], progress_callback=progress_callback)
+            progress_bar = st.progress(0, text="Rendering fast video frames...")
+            process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            
+            for t in range(n_frames):
+                if t % 50 == 0:
+                    pct = int((t / n_frames) * 100)
+                    progress_bar.progress(pct, text=f"Rendering fast video frames... ({pct}%)")
+                    
+                img = base_img.copy()
+                draw = ImageDraw.Draw(img)
+                
+                for i in range(n_neurons):
+                    val = data[i, t]
+                    color = (239, 68, 68) if val == 1 else (30, 30, 30)
+                    draw.polygon(polygons[i], fill=color, outline=(85, 85, 85), width=2)
+                    tot = cumulative_data[i, t]
+                    
+                    # centering text roughly
+                    txt = f"Total: {tot}"
+                    draw.text((centers[i][0]-18, centers[i][1]-6), txt, fill=(255,255,255), font=font)
+                    
+                process.stdin.write(img.tobytes())
+
+            process.stdin.close()
+            process.wait()
             progress_bar.empty()
-            plt.close(fig)
             
             with open(vid_path, "rb") as f:
                 video_bytes = f.read()
             
-            # Cleanup temp file
             if os.path.exists(vid_path):
                 os.remove(vid_path)
                 
             return video_bytes
 
-        @st.cache_data(show_spinner=False, persist=True)
-        def plot_aggregate_frame(_data_array, frame_idx):
-            n_vids, n_neurs, n_frms = _data_array.shape
-            agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
+        def _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1280, height=720):
+            n_neurs = _data_array.shape[1]
+            agg_data = np.sum(_data_array, axis=0)
             current_data = agg_data[:, frame_idx]
-            high_data = np.max(agg_data, axis=1) # Shape: (160,)
             
-            # Create high-res matplotlib figure
-            fig, ax = plt.subplots(figsize=(15, 9), dpi=120)
-            fig.patch.set_facecolor('#0E1117')
-            ax.set_facecolor('#0E1117')
-            
-            cols = 16
-            rows = int(np.ceil(n_neurs / cols))
+            hex_radius = 35 # larger for 720p
 
-            patches = []
-            # Build larger hex grid (pointy-topped)
-            hex_radius = 0.5 / np.sqrt(3) * 1.05 # slightly larger
+            cols = 16
+            centers = []
             for i in range(n_neurs):
                 r = i // cols
                 c = i % cols
-                x = c + (r % 2) * 0.5
-                y = r * np.sqrt(3) / 2
-                patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
-                
-                high_count = high_data[i]
-                count = current_data[i]
-                pct = (count / n_vids) * 100
-                ax.text(x, y, f"High: {high_count}\n{count}/{n_vids}\n{pct:.0f}%", ha='center', va='center', color='white', fontsize=7, fontweight='bold')
+                x = c * hex_radius * 1.732 + (r % 2) * hex_radius * 0.866
+                y = r * hex_radius * 1.5
+                centers.append((x, y))
 
-            cmap = mcolors.LinearSegmentedColormap.from_list("agg_red", ['#1E1E1E', '#EF4444'])
+            min_x = min(c[0] for c in centers)
+            max_x = max(c[0] for c in centers)
+            min_y = min(c[1] for c in centers)
+            max_y = max(c[1] for c in centers)
+            shift_x = (width - (max_x - min_x)) / 2 - min_x
+            shift_y = (height - (max_y - min_y)) / 2 - min_y
+
+            centers = [(int(x + shift_x), int(y + shift_y)) for x, y in centers]
+
+            polygons = []
+            for cx, cy in centers:
+                points = []
+                for j in range(6):
+                    angle = 2 * np.pi / 6 * (j + 0.5)
+                    px = cx + hex_radius * np.cos(angle)
+                    py = cy + hex_radius * np.sin(angle)
+                    points.append((px, py))
+                polygons.append(points)
+
+            bg_color = (14, 17, 23)
+            img = Image.new('RGB', (width, height), bg_color)
+            draw = ImageDraw.Draw(img)
             
-            collection = PatchCollection(patches, cmap=cmap, edgecolor='#555555', linewidth=1.5)
-            collection.set_array(current_data)
-            collection.set_clim(0, n_vids)
-            ax.add_collection(collection)
-            
-            ax.set_aspect('equal')
-            ax.axis('off')
-            ax.autoscale_view()
-            return fig
+            try:
+                font = ImageFont.truetype("arial.ttf", 12)
+                font_bold = ImageFont.truetype("arialbd.ttf", 13)
+            except IOError:
+                font = font_bold = ImageFont.load_default()
+                
+            for i in range(n_neurs):
+                count = current_data[i]
+                high_count = high_data[i]
+                
+                # Interpolate color between dark grey (30,30,30) and red (239,68,68) based on ratio
+                ratio = count / max(1, n_vids)
+                r_col = int(30 + ratio * (239 - 30))
+                g_col = int(30 + ratio * (68 - 30))
+                b_col = int(30 + ratio * (68 - 30))
+                fill_color = (r_col, g_col, b_col)
+                
+                draw.polygon(polygons[i], fill=fill_color, outline=(85, 85, 85), width=2)
+                
+                pct = (count / n_vids) * 100
+                txt1 = f"High: {high_count}"
+                txt2 = f"{count}/{n_vids}"
+                txt3 = f"{pct:.0f}%"
+                
+                cx, cy = centers[i]
+                draw.text((cx-20, cy-15), txt1, fill=(255,255,255), font=font_bold)
+                draw.text((cx-18, cy), txt2, fill=(255,255,255), font=font)
+                draw.text((cx-12, cy+15), txt3, fill=(255,255,255), font=font)
+                
+            return img
+
+        @st.cache_data(show_spinner=False, persist=True)
+        def plot_aggregate_frame(_data_array, frame_idx):
+            high_data = np.max(np.sum(_data_array, axis=0), axis=1)
+            n_vids = _data_array.shape[0]
+            # Extra large for static frame explorer
+            return _draw_aggregate_frame(_data_array, frame_idx, high_data, n_vids, width=1600, height=900)
 
         @st.cache_data(show_spinner=False, persist=True)
         def generate_aggregate_video(_data_array):
             n_vids, n_neurs, n_frms = _data_array.shape
-            agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
-            high_data = np.max(agg_data, axis=1) # Shape: (160,)
-            
-            # Create high-res matplotlib figure for video
-            fig, ax = plt.subplots(figsize=(15, 9), dpi=120)
-            fig.patch.set_facecolor('#0E1117')
-            ax.set_facecolor('#0E1117')
-            
-            cols = 16
-            rows = int(np.ceil(n_neurs / cols))
+            high_data = np.max(np.sum(_data_array, axis=0), axis=1)
 
-            patches = []
-            texts = []
-            
-            hex_radius = 0.5 / np.sqrt(3) * 1.05 # slightly larger
-            
-            for i in range(n_neurs):
-                r = i // cols
-                c = i % cols
-                x = c + (r % 2) * 0.5
-                y = r * np.sqrt(3) / 2
-                patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
-                txt = ax.text(x, y, "", ha='center', va='center', color='white', fontsize=7, fontweight='bold')
-                texts.append(txt)
-
-            cmap = mcolors.LinearSegmentedColormap.from_list("agg_red", ['#1E1E1E', '#EF4444'])
-            
-            collection = PatchCollection(patches, cmap=cmap, edgecolor='#555555', linewidth=1.5)
-            collection.set_array(agg_data[:, 0])
-            collection.set_clim(0, n_vids)
-            ax.add_collection(collection)
-            
-            ax.set_aspect('equal')
-            ax.axis('off')
-            ax.autoscale_view()
-
-            def init():
-                collection.set_array(agg_data[:, 0])
-                for i, count in enumerate(agg_data[:, 0]):
-                    high_count = high_data[i]
-                    pct = (count / n_vids) * 100
-                    texts[i].set_text(f"High: {high_count}\n{count}/{n_vids}\n{pct:.0f}%")
-                return [collection] + texts
-
-            def update(frame):
-                current_data = agg_data[:, frame]
-                collection.set_array(current_data)
-                for i, count in enumerate(current_data):
-                    high_count = high_data[i]
-                    pct = (count / n_vids) * 100
-                    texts[i].set_text(f"High: {high_count}\n{count}/{n_vids}\n{pct:.0f}%")
-                return [collection] + texts
-
-            # Generate animation (use higher bitrate for quality)
-            ani = animation.FuncAnimation(fig, update, frames=n_frms, init_func=init, blit=True)
-            
             vid_path = f"/tmp/agg_vid_{uuid.uuid4().hex}.mp4"
+            width, height = 1280, 720
             
-            progress_bar = st.progress(0, text="Rendering aggregate video frames (this may take up to a minute on the first load)...")
-            def progress_callback(current_frame, total_frames):
-                pct = int((current_frame / total_frames) * 100)
-                progress_bar.progress(pct, text=f"Rendering aggregate video frames... ({pct}%)")
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
+                '-s', f'{width}x{height}', '-pix_fmt', 'rgb24', '-r', '50',
+                '-i', '-', '-c:v', 'libx264', '-preset', 'fast', '-b:v', '4M',
+                '-pix_fmt', 'yuv420p', vid_path
+            ]
+            
+            progress_bar = st.progress(0, text="Rendering fast aggregate video frames...")
+            process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            
+            for t in range(n_frms):
+                if t % 50 == 0:
+                    pct = int((t / n_frms) * 100)
+                    progress_bar.progress(pct, text=f"Rendering fast aggregate video frames... ({pct}%)")
+                    
+                img = _draw_aggregate_frame(_data_array, t, high_data, n_vids, width=width, height=height)
+                process.stdin.write(img.tobytes())
                 
-            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264', '-b:v', '5M'], progress_callback=progress_callback)
+            process.stdin.close()
+            process.wait()
             progress_bar.empty()
-            plt.close(fig)
             
             with open(vid_path, "rb") as f:
                 video_bytes = f.read()
@@ -241,7 +254,7 @@ if uploaded_file is not None:
 
         with tab1:
             st.subheader(f"Video {selected_video} Playback")
-            with st.spinner(f"Generating high-performance playback for Video {selected_video} (takes ~5-10 seconds the first time)..."):
+            with st.spinner(f"Generating optimized playback for Video {selected_video}..."):
                 video_bytes = generate_video(selected_video, bint)
             st.video(video_bytes)
             
@@ -249,7 +262,7 @@ if uploaded_file is not None:
             st.subheader("Aggregated Neural Firing Over All Videos")
             st.markdown("This video shows the summation of neuron firings across all 297 videos. Observe the entire clip below, and use the **Frame Explorer** to scrub frame-by-frame without skipping values.")
             
-            with st.spinner("Generating crisp, high-res aggregated playback (takes ~15-30 seconds the first time)..."):
+            with st.spinner("Generating crisp, high-res aggregated playback (~5 seconds)..."):
                 agg_video_bytes = generate_aggregate_video(bint)
             st.video(agg_video_bytes)
 
@@ -257,9 +270,9 @@ if uploaded_file is not None:
             st.subheader("Frame-by-Frame Explorer")
             frame_slider = st.slider("Select Exact Frame", min_value=0, max_value=n_frames-1, value=0, step=1)
             
-            with st.spinner(f"Rendering frame {frame_slider}..."):
-                fig_frame = plot_aggregate_frame(bint, frame_slider)
-                st.pyplot(fig_frame)
+            # Using st.image since we return a PIL Image now
+            img_frame = plot_aggregate_frame(bint, frame_slider)
+            st.image(img_frame, use_container_width=True)
 
 else:
     st.info("Awaiting file upload. Please select a `.mat` file from the sidebar.")

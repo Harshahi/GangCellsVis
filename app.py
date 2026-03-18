@@ -41,7 +41,7 @@ if uploaded_file is not None:
         st.sidebar.header("Configuration")
         selected_video = st.sidebar.selectbox("Select Video", options=list(range(n_videos)), index=0)
 
-        @st.cache_data(show_spinner=False)
+        @st.cache_data(show_spinner=False, persist=True)
         def generate_video(video_idx, _data_array):
             data = _data_array[video_idx] # Shape: (160, 953)
             
@@ -87,7 +87,14 @@ if uploaded_file is not None:
             
             # Save to a temporary file, then read bytes
             vid_path = f"/tmp/vid_{video_idx}_{uuid.uuid4().hex}.mp4"
-            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264'])
+            
+            progress_bar = st.progress(0, text="Rendering individual video frames...")
+            def progress_callback(current_frame, total_frames):
+                pct = int((current_frame / total_frames) * 100)
+                progress_bar.progress(pct, text=f"Rendering individual video frames... ({pct}%)")
+            
+            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264'], progress_callback=progress_callback)
+            progress_bar.empty()
             plt.close(fig)
             
             with open(vid_path, "rb") as f:
@@ -99,7 +106,7 @@ if uploaded_file is not None:
                 
             return video_bytes
 
-        @st.cache_data(show_spinner=False)
+        @st.cache_data(show_spinner=False, persist=True)
         def plot_aggregate_frame(_data_array, frame_idx):
             n_vids, n_neurs, n_frms = _data_array.shape
             agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
@@ -139,7 +146,7 @@ if uploaded_file is not None:
             ax.autoscale_view()
             return fig
 
-        @st.cache_data(show_spinner=False)
+        @st.cache_data(show_spinner=False, persist=True)
         def generate_aggregate_video(_data_array):
             n_vids, n_neurs, n_frms = _data_array.shape
             agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
@@ -196,7 +203,14 @@ if uploaded_file is not None:
             ani = animation.FuncAnimation(fig, update, frames=n_frms, init_func=init, blit=True)
             
             vid_path = f"/tmp/agg_vid_{uuid.uuid4().hex}.mp4"
-            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264', '-b:v', '5M'])
+            
+            progress_bar = st.progress(0, text="Rendering aggregate video frames (this may take up to a minute on the first load)...")
+            def progress_callback(current_frame, total_frames):
+                pct = int((current_frame / total_frames) * 100)
+                progress_bar.progress(pct, text=f"Rendering aggregate video frames... ({pct}%)")
+                
+            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264', '-b:v', '5M'], progress_callback=progress_callback)
+            progress_bar.empty()
             plt.close(fig)
             
             with open(vid_path, "rb") as f:

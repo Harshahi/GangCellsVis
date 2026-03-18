@@ -44,9 +44,10 @@ if uploaded_file is not None:
         @st.cache_data(show_spinner=False, persist=True)
         def generate_video(video_idx, _data_array):
             data = _data_array[video_idx] # Shape: (160, 953)
+            cumulative_data = np.cumsum(data, axis=1) # Shape: (160, 953)
             
             # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(8, 5))
+            fig, ax = plt.subplots(figsize=(10, 6))
             fig.patch.set_facecolor('#0E1117')  # Match Streamlit dark theme
             ax.set_facecolor('#0E1117')
             
@@ -54,13 +55,19 @@ if uploaded_file is not None:
             rows = int(np.ceil(n_neurons / cols))
 
             patches = []
+            texts = []
+            
+            hex_radius = 0.5 / np.sqrt(3) * 1.05 # slightly larger
+            
             # Build hex grid (pointy-topped)
             for i in range(n_neurons):
                 r = i // cols
                 c = i % cols
                 x = c + (r % 2) * 0.5
                 y = r * np.sqrt(3) / 2
-                patches.append(RegularPolygon((x, y), numVertices=6, radius=0.5/np.sqrt(3), orientation=np.pi/2))
+                patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
+                txt = ax.text(x, y, "", ha='center', va='center', color='white', fontsize=6, fontweight='bold')
+                texts.append(txt)
 
             # Dark grey for resting (0), bright red for firing (1)
             cmap = mcolors.ListedColormap(['#1E1E1E', '#EF4444'])
@@ -76,11 +83,15 @@ if uploaded_file is not None:
 
             def init():
                 collection.set_array(data[:, 0])
-                return collection,
+                for i, count in enumerate(cumulative_data[:, 0]):
+                    texts[i].set_text(f"Total: {count}")
+                return [collection] + texts
 
             def update(frame):
                 collection.set_array(data[:, frame])
-                return collection,
+                for i, count in enumerate(cumulative_data[:, frame]):
+                    texts[i].set_text(f"Total: {count}")
+                return [collection] + texts
 
             # Generate animation
             ani = animation.FuncAnimation(fig, update, frames=n_frames, init_func=init, blit=True)
@@ -93,7 +104,7 @@ if uploaded_file is not None:
                 pct = int((current_frame / total_frames) * 100)
                 progress_bar.progress(pct, text=f"Rendering individual video frames... ({pct}%)")
             
-            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264'], progress_callback=progress_callback)
+            ani.save(vid_path, fps=50, extra_args=['-vcodec', 'libx264', '-b:v', '5M'], progress_callback=progress_callback)
             progress_bar.empty()
             plt.close(fig)
             
@@ -111,6 +122,7 @@ if uploaded_file is not None:
             n_vids, n_neurs, n_frms = _data_array.shape
             agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
             current_data = agg_data[:, frame_idx]
+            high_data = np.max(agg_data, axis=1) # Shape: (160,)
             
             # Create high-res matplotlib figure
             fig, ax = plt.subplots(figsize=(15, 9), dpi=120)
@@ -130,9 +142,10 @@ if uploaded_file is not None:
                 y = r * np.sqrt(3) / 2
                 patches.append(RegularPolygon((x, y), numVertices=6, radius=hex_radius, orientation=np.pi/2))
                 
+                high_count = high_data[i]
                 count = current_data[i]
                 pct = (count / n_vids) * 100
-                ax.text(x, y, f"{count}/{n_vids}\n{pct:.0f}%", ha='center', va='center', color='white', fontsize=7, fontweight='bold')
+                ax.text(x, y, f"High: {high_count}\n{count}/{n_vids}\n{pct:.0f}%", ha='center', va='center', color='white', fontsize=7, fontweight='bold')
 
             cmap = mcolors.LinearSegmentedColormap.from_list("agg_red", ['#1E1E1E', '#EF4444'])
             
@@ -150,6 +163,7 @@ if uploaded_file is not None:
         def generate_aggregate_video(_data_array):
             n_vids, n_neurs, n_frms = _data_array.shape
             agg_data = np.sum(_data_array, axis=0) # Shape: (160, 953)
+            high_data = np.max(agg_data, axis=1) # Shape: (160,)
             
             # Create high-res matplotlib figure for video
             fig, ax = plt.subplots(figsize=(15, 9), dpi=120)
@@ -187,16 +201,18 @@ if uploaded_file is not None:
             def init():
                 collection.set_array(agg_data[:, 0])
                 for i, count in enumerate(agg_data[:, 0]):
+                    high_count = high_data[i]
                     pct = (count / n_vids) * 100
-                    texts[i].set_text(f"{count}/{n_vids}\n{pct:.0f}%")
+                    texts[i].set_text(f"High: {high_count}\n{count}/{n_vids}\n{pct:.0f}%")
                 return [collection] + texts
 
             def update(frame):
                 current_data = agg_data[:, frame]
                 collection.set_array(current_data)
                 for i, count in enumerate(current_data):
+                    high_count = high_data[i]
                     pct = (count / n_vids) * 100
-                    texts[i].set_text(f"{count}/{n_vids}\n{pct:.0f}%")
+                    texts[i].set_text(f"High: {high_count}\n{count}/{n_vids}\n{pct:.0f}%")
                 return [collection] + texts
 
             # Generate animation (use higher bitrate for quality)
